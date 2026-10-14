@@ -1,0 +1,27 @@
+# Compiled executables
+/minimus
+/minix-music
+/mpg123-test
+/plslist
+/sigwinch-test
+/socket-test
+/state-test
+
+# Object files
+*.o
+
+# Standalone development and diagnostic test sources
+/mpg123-test.c
+/sigwinch-test.c
+/socket-test.c
+/state-test.c
+/plslist.c
+
+# Timestamped and legacy backups
+*.bak
+*.bak.*
+
+# Editor temporary files
+*~
+*.swp
+*.swo

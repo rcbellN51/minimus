@@ -63,6 +63,26 @@ make install PREFIX=/path/to/prefix
 
 **Note:** The fallback playlist path is currently compiled as `/usr/local/share/minimus/stations.pls`. Changing the installation prefix does not automatically change that path.
 
+## Audio compatibility
+
+minimus was developed and tested on MINIX 3.4 using mpg123 1.22.4.
+
+Audio playback depends on a functioning MINIX audio driver and a compatible mpg123 output module.
+
+The development environment required additional audio-related work:
+
+- **ES1370 driver:** Modifications were made to the MINIX 3 ES1370 audio driver to enable audio playback in the development VM.
+- **mpg123:** A custom `minix` output module was developed for mpg123 1.22.4. This module uses `/dev/audio` and MINIX's native audio interface (`sys/ioc_sound.h`).
+- **minimus:** The player currently launches mpg123 with `-R -o minix`, explicitly selecting the custom output module.
+
+The standard mpg123 `sun` output module was tested in the development environment but failed to initialize audio.
+
+Consequently, minimus should not be assumed to provide working audio playback on an unmodified MINIX 3 installation.
+
+The ES1370 driver modifications and custom mpg123 output module are not included in this repository. Users may need to adapt their audio configuration or modify mpg123 to provide a compatible output module.
+
+These modifications were experimental and are not maintained or distributed as part of the minimus project.
+
 ## Usage
 
 Start with the configured default playlist:

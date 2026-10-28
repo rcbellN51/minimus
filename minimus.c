@@ -13,11 +13,24 @@
 #include "state.h"
 
 #define DEFAULT_PLAYLIST "/usr/local/share/minimus/stations.pls"
-#define INPUT_SIZE 1024
-#define COMMAND_SIZE 2048
-#define OUTPUT_SIZE 2048
-#define TRACK_SIZE 2048
-#define MESSAGE_SIZE 128
+#define MINIMUS_VERSION     "0.1"
+#define INPUT_SIZE          1024
+#define COMMAND_SIZE        2048
+#define OUTPUT_SIZE         2048
+#define TRACK_SIZE          2048
+#define MESSAGE_SIZE        128
+#define STATUS_LABEL_WIDTH  9
+#define HEADER_ROWS         3
+
+/*
+ * MINIX color palette, shared with mininet.
+ * ANSI 256-color escape sequences.
+ */
+#define COLOR_RESET         "\033[0m"
+#define COLOR_YELLOW        "\033[38;5;221m"
+#define COLOR_WHITE_BLUE    "\033[38;5;15;48;5;24m"
+#define COLOR_WHITE_GREEN   "\033[38;5;15;48;5;22m"
+#define COLOR_BLACK_YELLOW  "\033[38;5;0;48;5;221m"
 
 struct screen_layout {
 	unsigned int rows;
@@ -133,6 +146,47 @@ terminal_height(void)
 	return size.ws_row;
 }
 
+static void
+draw_header(void)
+{
+	unsigned int width;
+	unsigned int column;
+
+	width = terminal_width();
+
+	terminal_move(1, 3);
+	printf("%s\033[1mminimus %s%s",
+	    COLOR_YELLOW, MINIMUS_VERSION, COLOR_RESET);
+
+	/*
+	 * Draw the separator using the terminal's
+	 * DEC special graphics character set.
+	 */
+	terminal_move(2, 1);
+	printf("\033(0");
+
+	for (column = 1; column <= width; column++)
+		putchar('q');
+
+	printf("\033(B");
+}
+
+#define STATUS_LABEL_WIDTH 9
+
+static void
+draw_status_label(const char *label, const char *color)
+{
+	unsigned int length;
+	unsigned int padding;
+
+	length = (unsigned int)strlen(label);
+	padding = length < STATUS_LABEL_WIDTH ?
+	    STATUS_LABEL_WIDTH - length : 0;
+
+	printf("%s%*s%s %s ",
+	    color, (int)padding, "", label, COLOR_RESET);
+}
+
 static unsigned int
 wrapped_height(const char *label, const char *text,
     unsigned int width)
@@ -190,7 +244,8 @@ wrapped_height(const char *label, const char *text,
 }
 
 static unsigned int
-draw_wrapped(unsigned int row, const char *label, const char *text)
+draw_wrapped(unsigned int row, const char *label,
+    const char *text, const char *color)
 {
 	unsigned int width;
 	unsigned int prefix;
@@ -209,7 +264,7 @@ draw_wrapped(unsigned int row, const char *label, const char *text)
 	if (width > 1)
 		width--;
 
-	prefix = (unsigned int)strlen(label);
+	prefix = STATUS_LABEL_WIDTH + 1;
 
 	if (width <= prefix)
 		width = prefix + 1;
@@ -220,7 +275,8 @@ draw_wrapped(unsigned int row, const char *label, const char *text)
 	lines = 1;
 
 	terminal_move(row, 1);
-	printf("\033[2K%s", label);
+	printf("\033[2K");
+	draw_status_label(label, color);
 
 	while (offset < length) {
 		chunk = length - offset;
@@ -256,7 +312,7 @@ draw_wrapped(unsigned int row, const char *label, const char *text)
 
 static unsigned int
 draw_station_wrapped(unsigned int row, const char *label,
-    const char *text, int highlighted)
+    const char *text, int highlighted, int playing)
 {
 	unsigned int width;
 	unsigned int prefix;
@@ -287,7 +343,13 @@ draw_station_wrapped(unsigned int row, const char *label,
 	lines = 1;
 
 	terminal_move(row, 1);
-	printf("\033[2K%s", label);
+	printf("\033[2K");
+
+	if (playing)
+		printf("%s%c%s%s", COLOR_YELLOW, label[0],
+		    COLOR_RESET, label + 1);
+	else
+		printf("%s", label);
 
 	while (offset < length) {
 		chunk = length - offset;
@@ -305,12 +367,13 @@ draw_station_wrapped(unsigned int row, const char *label,
 		}
 
 		if (highlighted)
-			printf("\033[7m");
+			printf("%s", playing ?
+			    COLOR_BLACK_YELLOW : COLOR_WHITE_BLUE);
 
 		printf(" %.*s ", (int)chunk, text + offset);
 
 		if (highlighted)
-			printf("\033[27m");
+			printf("%s", COLOR_RESET);
 
 		offset += chunk;
 
@@ -417,14 +480,13 @@ calculate_layout(struct screen_layout *layout,
 		station_title = "None";
 	}
 
-	playing_lines = wrapped_height("Playing:     ",
+	playing_lines = wrapped_height("          ",
 	    station_title, layout->columns);
 
 	if (state == PLAYBACK_STOPPED) {
 		track_lines = 1;
 	} else {
-		track_label = state == PLAYBACK_PAUSED ?
-		    "Paused:      " : "Now playing: ";
+		track_label = "          ";
 
 		track_lines = wrapped_height(track_label, track,
 		    layout->columns);
@@ -435,7 +497,8 @@ calculate_layout(struct screen_layout *layout,
 	 * the wrapped Playing and track fields, and
 	 * one command-prompt row.
 	 */
-	reserved_rows = 1 + 1 + playing_lines + track_lines + 1 + 1;
+	reserved_rows = HEADER_ROWS + 1 + 1 + playing_lines +
+	    track_lines + 1 + 1;
 
 	if (reserved_rows >= layout->rows) {
 		layout->too_small = 1;
@@ -448,7 +511,7 @@ calculate_layout(struct screen_layout *layout,
 	 * The separator occupies the row immediately
 	 * above the volume display.
 	 */
-	layout->status_row = layout->station_rows + 2;
+	layout->status_row = HEADER_ROWS + layout->station_rows + 2;
 	layout->track_row = layout->status_row + 1 + playing_lines;
 	layout->message_row = layout->track_row + track_lines;
 	layout->prompt_row = layout->message_row + 1;
@@ -457,7 +520,7 @@ calculate_layout(struct screen_layout *layout,
 static void
 draw_station_list(const struct pls_playlist *playlist, size_t index,
     size_t selected_index, size_t *first_station,
-    unsigned int available_rows)
+    unsigned int available_rows, enum playback_state state)
 {
 	char label[32];
 	const char *title;
@@ -559,7 +622,7 @@ draw_station_list(const struct pls_playlist *playlist, size_t index,
 
 	*first_station = first;
 
-	row = 1;
+	row = HEADER_ROWS + 1;
 
 	if (first > 0) {
 		terminal_move(row++, 1);
@@ -576,11 +639,13 @@ draw_station_list(const struct pls_playlist *playlist, size_t index,
 		    playlist->stations[i].title : "(untitled)";
 
 		row += draw_station_wrapped(row, label, title,
-		    i == selected_index);
+		    i == selected_index,
+		    i == index && state != PLAYBACK_STOPPED);
 	}
 
-	if (last < playlist->count && row <= available_rows) {
-		terminal_move(available_rows, 1);
+	if (last < playlist->count &&
+	    row <= HEADER_ROWS + available_rows) {
+		terminal_move(HEADER_ROWS + available_rows, 1);
 		printf("\033[2K  v %lu more station%s",
 		    (unsigned long)(playlist->count - last),
 		    playlist->count - last == 1 ? "" : "s");
@@ -601,17 +666,17 @@ draw_status(const struct pls_playlist *playlist, size_t index,
 	    &playlist->stations[index] : NULL;
 
 	terminal_move(status_row, 1);
-	printf("\033[2KVolume:      %u%%", volume);
+	printf("\033[2K");
+	draw_status_label("Volume:", COLOR_WHITE_GREEN);
+	printf("%u%%", volume);
 
 	playing_lines = draw_wrapped(status_row + 1,
-	    "Playing:     ",
+	    "Playing:",
 	    station == NULL ? "None" :
-	    station->title != NULL ? station->title : "(untitled)");
+	    station->title != NULL ? station->title : "(untitled)",
+	    COLOR_WHITE_BLUE);
 
 	track_row = status_row + 1 + playing_lines;
-
-	terminal_move(track_row, 1);
-	printf("\033[2KNow playing:");
 
 	fflush(stdout);
 	return track_row;
@@ -641,11 +706,13 @@ draw_screen(const struct pls_playlist *playlist, size_t index,
 		return;
 	}
 
+	draw_header();
+
 	if (view == VIEW_HELP) {
 		draw_help(layout.station_rows, help_offset);
 	} else {
 		draw_station_list(playlist, index, selected_index,
-		    first_station, layout.station_rows);
+		    first_station, layout.station_rows, state);
 	}
 
 	*status_row = layout.status_row;
@@ -655,21 +722,25 @@ draw_screen(const struct pls_playlist *playlist, size_t index,
 
 	if (muted) {
 		terminal_move(*status_row, 1);
-		printf("\033[2KVolume:      Mute");
+		printf("\033[2K");
+		draw_status_label("Volume:", COLOR_WHITE_GREEN);
+		printf("Mute");
 	}
 
 	terminal_move(*track_row, 1);
 	printf("\033[J");
 
 	if (state == PLAYBACK_STOPPED) {
-		printf("\033[2KStopped");
+		printf("\033[2K%*s", STATUS_LABEL_WIDTH,
+		    "Stopped");
 		*prompt_row = *track_row + 2;
 	} else {
 		label = state == PLAYBACK_PAUSED ?
-		    "Paused:      " : "Now playing: ";
+		    "Paused:" : "Track:";
 
 		*prompt_row = *track_row +
-		    draw_wrapped(*track_row, label, track) + 1;
+		    draw_wrapped(*track_row, label, track,
+		    COLOR_WHITE_BLUE) + 1;
 	}
 
 	draw_message(*prompt_row - 1, message);
@@ -688,7 +759,7 @@ draw_help(unsigned int available_rows, unsigned int offset)
 		if (i >= HELP_COUNT)
 			break;
 
-		terminal_move(row + 1, 1);
+		terminal_move(HEADER_ROWS + row + 1, 1);
 		printf("\033[2K%.*s",
 		    (int)(terminal_width() - 1), help_lines[i]);
 	}
@@ -979,12 +1050,13 @@ main(int argc, char *argv[])
 				    view, help_offset);
 			} else if (strncmp(output, "@V ", 3) == 0) {
 				terminal_move(status_row, 1);
+				printf("\033[2K");
+				draw_status_label("Volume:", COLOR_WHITE_GREEN);
 
 				if (muted)
-					printf("\033[2KVolume:      Mute");
+					printf("Mute");
 				else
-					printf("\033[2KVolume:      %.0f%%",
-					    atof(output + 3));
+					printf("%.0f%%", atof(output + 3));
 			} else if (strncmp(output, "@R ", 3) == 0 ||
 			    strncmp(output, "@S ", 3) == 0 ||
 			    strncmp(output, "@F ", 3) == 0 ||
